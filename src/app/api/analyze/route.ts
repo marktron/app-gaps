@@ -93,7 +93,7 @@ function truncateToTokens(text: string, maxTokens: number): string {
   
   // Truncate to approximately maxTokens
   const maxChars = maxTokens * 4;
-  return text.slice(0, maxChars) + '...';
+  return text.slice(0, maxChars) + '…';
 }
 
 async function fetchReviewsPage(appId: string, page: number): Promise<Review[]> {
@@ -132,7 +132,6 @@ async function analyzeReviewsWithGPT(reviews: string[]): Promise<{ themes: Theme
 
     // Calculate total tokens in processed reviews
     const totalReviewTokens = processedReviews.reduce((sum, review) => sum + estimateTokens(review), 0);
-    console.log(`🔔 Total tokens in reviews: ${totalReviewTokens}`);
 
     // Check if we're within the total token limit
     if (totalReviewTokens > MAX_TOTAL_TOKENS) {
@@ -143,11 +142,10 @@ async function analyzeReviewsWithGPT(reviews: string[]): Promise<{ themes: Theme
       }
     }
 
-    console.log(`🔔 Processing ${processedReviews.length} reviews (truncated to ${MAX_TOKENS_PER_REVIEW} tokens each)`);
-
     const prompt = `I want to explore unmet needs and potential business opportunities based on competitors in the App Store. Analyze these App Store reviews and provide insights in the following JSON format. When doing the analysis, put an emphasis on topics that suggest potential for a new entrant in the market, and less of an emphasis on minor issues like customer service or minor UI complaints. Return ONLY the JSON object, with no additional text or explanations:
 
 {
+
   "themes": [
     {
       "title": "string",
@@ -170,6 +168,7 @@ Requirements:
 - Each theme must have all fields filled
 - Impact must be exactly "High", "Medium", or "Low"
 - Prioritized themes should be ordered by impact (High first)
+- The review quote should be a verbatim quote from the reviews, do not make up anything
 - Return ONLY the JSON object, with no additional text or explanations
 - Ensure the response is valid JSON that can be parsed
 
@@ -177,7 +176,6 @@ Reviews:
 ${processedReviews.join('\n\n')}`;
 
     const estimatedTokens = estimateTokens(prompt);
-    console.log(`🔔 Estimated tokens in prompt: ${estimatedTokens}`);
 
     const completion = await openai.chat.completions.create({
       model: process.env.OPENAI_MODEL || "gpt-4o-mini",
@@ -195,15 +193,12 @@ ${processedReviews.join('\n\n')}`;
       max_tokens: 1000
     });
 
-    console.log('🔔 Received response from OpenAI');
-
     const response = completion.choices[0]?.message?.content || '';
     
     try {
       // Clean the response to ensure it's valid JSON
       const cleanedResponse = response.trim().replace(/^```json\n?|\n?```$/g, '');
       const parsedResponse = JSON.parse(cleanedResponse);
-      console.log('🔔 Parsed JSON response:', parsedResponse);
       
       return {
         themes: parsedResponse.themes || [],
@@ -223,38 +218,77 @@ ${processedReviews.join('\n\n')}`;
   }
 }
 
+// Helper function to fetch app info from iTunes Lookup API
+async function fetchAppInfo(appId: string): Promise<{ name: string; description: string; averageUserRating: number | null; userRatingCount: number | null; artworkUrl512: string | null }> {
+  const url = `https://itunes.apple.com/lookup?id=${appId}&country=us&entity=software`;
+  try {
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': process.env.APPLE_RSS_USER_AGENT || 'AppStoreReviewAnalyzer/1.0',
+      },
+    });
+    if (!response.ok) {
+      console.error(`🚨 Failed to fetch app info: ${response.status}`);
+      return { name: '', description: '', averageUserRating: null, userRatingCount: null, artworkUrl512: null };
+    }
+    const data = await response.json();
+    const result = data.results && data.results[0];
+    return {
+      name: result?.trackName || '',
+      description: result?.description || '',
+      averageUserRating: typeof result?.averageUserRating === 'number' ? result.averageUserRating : null,
+      userRatingCount: typeof result?.userRatingCount === 'number' ? result.userRatingCount : null,
+      artworkUrl512: typeof result?.artworkUrl512 === 'string' ? result.artworkUrl512 : null,
+    };
+  } catch (error) {
+    console.error('🚨 Error fetching app info:', error);
+    return { name: '', description: '', averageUserRating: null, userRatingCount: null, artworkUrl512: null };
+  }
+}
+
 export async function POST(request: Request) {
   try {
-    const { url } = await request.json();
+    const { input } = await request.json();
 
-    // Extract app ID from URL
-    const match = url.match(/\/id(\d+)/);
-    if (!match) {
-      throw new ValidationError('Invalid App Store URL');
+    if (!input || typeof input !== 'string') {
+      throw new ValidationError('Missing or invalid input. Please provide an App Store URL or App Store ID.');
     }
 
-    const appId = match[1];
-    console.log('🔔 Processing app ID:', appId);
+    let appId: string | null = null;
+
+    // Check if input is a numeric App Store ID (7-12 digits typical for App Store IDs)
+    if (/^\d{7,12}$/.test(input.trim())) {
+      appId = input.trim();
+    } else {
+      // Try to extract appId from URL
+      const match = input.match(/\/id(\d{7,12})/);
+      if (match) {
+        appId = match[1];
+      }
+    }
+
+    if (!appId) {
+      throw new ValidationError('Invalid input. Please provide a valid App Store URL or App Store ID.');
+    }
+    
+    // Fetch app info
+    const appInfo = await fetchAppInfo(appId);
     
     const allReviews: Review[] = [];
     
     // Fetch reviews from pages 1-10
     for (let page = 1; page <= RSS_PAGES; page++) {
-      console.log(`🔔 Fetching page ${page}`);
       const reviews = await fetchReviewsPage(appId, page);
       
       if (reviews.length === 0) {
-        console.log(`🔔 No more reviews found on page ${page}`);
         break;
       }
 
       allReviews.push(...reviews);
-      console.log(`🔔 Found ${reviews.length} reviews on page ${page}`);
 
       // Stop if we have enough reviews
       if (allReviews.length >= MAX_REVIEWS_TOTAL) {
         allReviews.length = MAX_REVIEWS_TOTAL;
-        console.log('🔔 Reached reviews limit');
         break;
       }
 
@@ -263,8 +297,6 @@ export async function POST(request: Request) {
         await new Promise(resolve => setTimeout(resolve, RSS_DELAY_MS));
       }
     }
-
-    console.log(`🔔 Total reviews collected: ${allReviews.length}`);
 
     // Extract just the content text from the reviews
     const reviewContents = allReviews
@@ -276,12 +308,11 @@ export async function POST(request: Request) {
       })
       .filter((content): content is string => typeof content === 'string' && content.length > 0);
 
-    console.log(`🔔 Extracted ${reviewContents.length} review contents`);
-
     // Analyze reviews with GPT
     const analysis = await analyzeReviewsWithGPT(reviewContents);
 
-    return NextResponse.json(analysis);
+    // Return appInfo in the response
+    return NextResponse.json({ ...analysis, appInfo });
 
   } catch (error) {
     console.error('🚨 Error processing request:', error);

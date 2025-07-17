@@ -18,24 +18,43 @@ interface PrioritizedTheme {
 interface AnalysisResponse {
   themes: Theme[];
   prioritizedThemes: PrioritizedTheme[];
+  appInfo?: {
+    name: string;
+    description: string;
+    averageUserRating: number | null;
+    userRatingCount: number | null;
+    artworkUrl512: string | null;
+  };
 }
 
 export default function Home() {
-  const [url, setUrl] = useState('');
+  const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [themes, setThemes] = useState<Theme[]>([]);
   const [prioritizedThemes, setPrioritizedThemes] = useState<PrioritizedTheme[]>([]);
+  const [appInfo, setAppInfo] = useState<{
+    name: string;
+    description: string;
+    averageUserRating: number | null;
+    userRatingCount: number | null;
+    artworkUrl512: string | null;
+  } | null>(null);
+  const [showFullDescription, setShowFullDescription] = useState(false);
 
-  const isValidUrl = (url: string) => {
-    const regex = /^https:\/\/apps\.apple\.com\/[a-z]{2}\/app\/.+\/id(\d+)/;
-    return regex.test(url);
-  };
+  function isValidAppStoreInput(input: string): boolean {
+    if (!input || typeof input !== 'string') return false;
+    // Check for App Store ID (7-12 digits)
+    if (/^\d{7,12}$/.test(input.trim())) return true;
+    // Check for App Store URL containing /id<digits>
+    if (/\/id\d{7,12}/.test(input)) return true;
+    return false;
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isValidUrl(url)) {
-      setError('Please enter a valid App Store URL');
+    if (!isValidAppStoreInput(input)) {
+      setError('Please enter a valid App Store URL or App Store ID');
       return;
     }
 
@@ -50,7 +69,7 @@ export default function Home() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({ input }),
       });
 
       if (!response.ok) {
@@ -67,6 +86,7 @@ export default function Home() {
 
       setThemes(data.themes);
       setPrioritizedThemes(data.prioritizedThemes || []);
+      setAppInfo(data.appInfo || null);
     } catch (err) {
       console.error('🚨 Error:', err);
       setError(err instanceof Error ? err.message : 'An error occurred');
@@ -106,17 +126,17 @@ export default function Home() {
           <div className="flex gap-4">
             <input
               type="text"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder="Paste an iOS App Store URL"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Paste an iOS App Store URL or App Store ID"
               className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 placeholder-gray-500"
             />
             <button
               type="submit"
-              disabled={isLoading || !url}
+              disabled={isLoading || !input}
               className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {isLoading ? 'Analyzing...' : 'Analyze'}
+              {isLoading ? 'Analyzing…' : 'Analyze'}
             </button>
           </div>
         </form>
@@ -125,7 +145,7 @@ export default function Home() {
         {isLoading && (
           <div className="text-center py-8">
             <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-blue-600 border-t-transparent"></div>
-            <p className="mt-2 text-gray-600">Analyzing reviews...</p>
+            <p className="mt-2 text-gray-600">Analyzing reviews…</p>
           </div>
         )}
 
@@ -145,6 +165,45 @@ export default function Home() {
         {/* Results */}
         {themes.length > 0 && (
           <div className="space-y-8">
+            {/* App Info */}
+            {appInfo && (
+              <div className="bg-white rounded-lg shadow p-6 mb-6">
+                {appInfo.artworkUrl512 && (
+                  <img
+                    src={appInfo.artworkUrl512}
+                    alt={appInfo.name + ' app icon'}
+                    className="w-20 h-20 rounded-2xl mb-4 mx-auto shadow-md"
+                    width={80}
+                    height={80}
+                  />
+                )}
+                <h2 className="text-2xl font-bold text-gray-900 text-center mb-2">{appInfo.name}</h2>
+                {(appInfo.averageUserRating !== null && appInfo.userRatingCount !== null) && (
+                  <p className="text-gray-800  text-center mb-2">
+                    Rating: {appInfo.averageUserRating.toFixed(2)} ({appInfo.userRatingCount.toLocaleString()} reviews)
+                  </p>
+                )}
+                <p className="text-gray-700 font-bold mb-2">App Description</p>
+                {(() => {
+                  const lines = appInfo.description.split('\n');
+                  const shouldTruncate = lines.length > 3;
+                  const visibleLines = showFullDescription ? lines : lines.slice(0, 3);
+                  return (
+                    <>
+                      <p className="text-gray-700 whitespace-pre-line">{visibleLines.join('\n')}</p>
+                      {shouldTruncate && (
+                        <button
+                          className="mt-2 text-blue-600 hover:underline text-sm"
+                          onClick={() => setShowFullDescription(v => !v)}
+                        >
+                          {showFullDescription ? 'Show less' : 'Show more'}
+                        </button>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+            )}
             {/* Prioritized Themes */}
             <div className="bg-white text-gray-900 rounded-lg shadow p-6">
               <h2 className="text-xl font-semibold mb-4">Prioritized Themes</h2>
